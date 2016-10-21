@@ -54,9 +54,3 @@
 (def handle-freq
   (osc-handle ctl-server "/freq"
               control-freq))
-
-
-(defn foo
-  []
-  (demo 3 (noiser))
-  nil)
