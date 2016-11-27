@@ -22,22 +22,26 @@
 
 (def ensemble
   (begin {:sphere {:instrument sphere
-                   :stage :single
-                   :single (interleave (rand-chord->phraseq 3 1 4 1 [:C3 :minor 3 12])
-                                       (rand-chord->phraseq 3 1 4 1 [:D3 :minor 3 12]))
-                   :params {:amp 1.0}}
+                   :phrases-per-stage 2
+                   :stage :C4
+                   :C4 (interleave (rand-chord->phraseq 3 0 4 1 [:C3 :minor 3 24])
+                                   (rand-chord->phraseq 3 0 4 1 [:D3 :minor 3 24]))
+                   :params {:amp 0.8}}
           :piano {:instrument piano
+                  :phrases-per-stage 2
                   :stage :C3
-                  :C3 (rand-chord->phraseq 1 1/4 4 1 [:C3 :minor 7 24])
+                  :C3 (merge-phraseqs (rand-chord->phraseq 1/4 1/4 3/4 2 [:C3 :minor 3 24])
+                                      (repeat {:length 2 :tones []}))
                   :D3 (rand-chord->phraseq 1 1/4 4 1 [:D3 :minor 7 24])
                   :params {:vel 60
                            :release 0.8
                            :sustain 0.1}}
           :beep {:instrument beep
+                 :mute true
                  :stage :single
                  :single (rand-rhythm->phraseq 4 [1/4 1/2 1])
                  :params {:amp 0.6
                           :note 60}}}
         (metronome 60)))
-;; (end ensemble)
-;; (stop)
+(end ensemble)
+(stop)
