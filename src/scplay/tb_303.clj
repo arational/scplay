@@ -3,7 +3,7 @@
 
 (defcgen tb-303
   "A clone of the sound of a Roland TB-303 bass synthesizer."
-  [note   {:default 30 :doc "midi note value input"}
+  [note   {:default 60 :doc "midi note value input"}
    wave   {:default 0 :doc "0=saw, 1=square"}
    cutoff {:default 100 :doc "bottom rlpf frequency"}
    env    {:default 1000 :doc "+ cutoff is top of rlpf frequency"}
