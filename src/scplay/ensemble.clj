@@ -14,63 +14,72 @@
     (let [min (or min 0)
           max (or max 1.0)
           val (scale-range (first args) 0.0 1.0 min max)]
-      (swap! performance-atom update :params
-             assoc (keyword name) val))))
-
-(defn ctl-osc-handler [ctl performance-atom]
-  (fn [{:keys [args]}]
-    (let [val (first args)]
-      (swap! performance-atom update ctl val))))
+      (swap! performance-atom
+             (fn [{:keys [stage mono-node] :as performance}]
+               (let [param (keyword name)]
+                 (when (and (not stage) mono-node)
+                   (apply ctl mono-node param val))
+                 (update performance
+                         :params assoc param val)))))))
 
 ;; Usefull for combining phraseqs:
 ;; interleave
 ;; stretch
 
-(defn- play-tone [instrument metro phase-beat params tone]
+(defn- play-tone [node monophonic? metro phrase-beat params tone]
   (let [part->params #(->> % :params
                            (merge params)
                            seq
                            flatten)
         part (first tone)
-        beat (+ phase-beat (:beat part))
+        beat (+ phrase-beat (:beat part))
         node (at (metro beat)
-                 (apply instrument (part->params part)))]
+                 (apply (if monophonic?
+                          (partial ctl node)
+                          node)
+                        (part->params part)))]
     (loop [beat beat
            tone (next tone)]
       (when tone
         (let [part (first tone)
               beat (+ beat (:beat part))]
-          (at (metro beat)
-              (apply ctl node (part->params part)))
-          (recur beat (next tone)))))))
+          (at (metro beat) (apply ctl node (part->params part)))
+          (recur beat (next tone)))))
+    node))
 
 (defn perform [metro performance-atom]
   (swap! performance-atom
-         (fn [{:keys [instrument stop mute stage params phrases-per-stage stage-phrases phrase-in-stage] :as performance}]
-           (when (not stop)
+         (fn [{:keys [instrument stage params phrases-per-stage stage-phrases phrase-in-stage monophonic? mono-node] :as performance}]
+           (if stage
              (let [phraseq (stage performance)
                    phrase (if phrases-per-stage
                             (stage-phrases phrase-in-stage)
                             (first phraseq))
+                   phrase-beat (metro)
+                   node (if mono-node
+                          mono-node
+                          instrument)
+                   performance (if monophonic?
+                                 (assoc performance :mono-node node)
+                                 performance)
                    performance (if phrases-per-stage
                                  (assoc performance
                                         :phrase-in-stage (mod (inc phrase-in-stage)
                                                               phrases-per-stage))
                                  (assoc performance
-                                        stage (rest phraseq)))
-                   phrase-beat (metro)]
-               (when (not mute)
-                 (doseq [tone (:tones phrase)]
-                   (play-tone instrument
-                              metro
-                              phrase-beat
-                              params
-                              tone)))
+                                        stage (rest phraseq)))]
                (apply-by (metro (+ phrase-beat (:length phrase)))
                          #'perform
                          [metro performance-atom])
-               performance))))
-  nil)
+               (doseq [tone (:tones phrase)]
+                 (play-tone node
+                            monophonic?
+                            metro
+                            phrase-beat
+                            params
+                            tone))
+               performance)
+             performance))))
 
 (defn stretch-phraseq [n phraseq]
   (concat (repeat n (first phraseq))
@@ -150,14 +159,10 @@
                        (prn (str path "/" name))
                        (osc-handle server (str path "/" name)
                                    (param-osc-handler param performance-atom)))
-        handle-ctl (fn [ctl]
-                     (osc-handle server (str path "/" (name ctl))
-                                 (ctl-osc-handler ctl performance-atom)))
         params (->> instrument
                     :params
                     (filter usable-param?))]
     (doseq [param params] (handle-param param))
-    (handle-ctl :mute)
     nil))
 
 (defn- seq-stage-phrases [performance]
@@ -170,16 +175,39 @@
              stage (drop phrases-per-stage (stage performance)))
       performance)))
 
+(defn- performer->effect-inst [{:keys [instrument effect params]}]
+  (if effect
+    (fn [& params]
+      (inst-fx! instrument
+                (fn [& args]
+                  (apply effect (concat args params)))))
+    instrument))
+
 (defn begin [lineup metro]
   (let [performer->performance (fn [performer]
                                  (-> (if (:phrases-per-stage performer)
-                                       (assoc performer :phrase-in-stage 0)
+                                       (assoc performer
+                                              :phrase-in-stage 0)
                                        performer)
                                      seq-stage-phrases
+                                     (assoc :instrument
+                                            (performer->effect-inst performer))
                                      atom))
         performances (map (fn [[ident performance]]
                             [ident (performer->performance performance)])
                           lineup)
+        begin-performance (fn [performance-atom]
+                            (let [{:keys [stage monophonic?]} @performance-atom]
+                              (when (or (not stage) monophonic?)
+                                (swap! performance-atom
+                                       (fn [{:keys [instrument params]
+                                             :as performance}]
+                                         (assoc performance
+                                                :mono-node (apply instrument
+                                                                  (-> params
+                                                                      seq
+                                                                      flatten))))))
+                              (when stage (perform metro performance-atom))))
         handle-stage-event (fn [{:keys [note]}]
                              (let [note-name (find-note-name note)]
                                (prn note-name)
@@ -187,18 +215,27 @@
                                  (swap! performance-atom
                                         (fn [performance]
                                           (if (contains? performance note-name)
-                                            (-> (assoc performance :stage note-name)
+                                            (-> (assoc performance
+                                                       :stage note-name)
                                                 seq-stage-phrases)
                                             performance))))))
         midi-event-key (java.util.UUID/randomUUID)]
     (on-event [:midi :note-on] handle-stage-event midi-event-key)
     (doseq [[ident performance-atom] performances]
       (handle-performance (str "/" (name ident)) performance-atom)
-      (perform metro performance-atom))
+      (begin-performance performance-atom))
     {:performances (into {} performances)
      :stage-event-key midi-event-key}))
 
 (defn end [ensemble]
   (doseq [[_ performance-atom] (:performances ensemble)]
-    (swap! performance-atom assoc :stop true))
+    (swap! performance-atom
+           (fn [performance]
+             (-> performance
+                 (dissoc :stage)
+                 (update :mono-node
+                         (fn [mono-node]
+                           (when mono-node
+                             (kill mono-node)
+                             nil)))))))
   (remove-event-handler (:stage-event-key ensemble)))

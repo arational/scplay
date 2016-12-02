@@ -4,6 +4,11 @@
         [scplay.sphere]
         [scplay.piano]
         [scplay.ensemble]))
+;; interesting isntruments:
+;; prophet
+;; tb303
+;; simple-flute
+;; bubbles
 
 (definst beep [note {:default 60}
                amp {:default 0.7 :min 0.0 :max 0.0 :step 0.1}]
@@ -37,11 +42,14 @@
                            :release 0.8
                            :sustain 0.1}}
           :beep {:instrument beep
-                 :mute true
                  :stage :single
                  :single (rand-rhythm->phraseq 4 [1/4 1/2 1])
                  :params {:amp 0.6
-                          :note 60}}}
+                          :note 60}}
+          :mono-test {:instrument piano
+                      :monophonic? true
+                      :effect fx-feedback
+                      :params {:decay 0.8}}}
         (metronome 60)))
 (end ensemble)
 (stop)
