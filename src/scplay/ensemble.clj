@@ -22,6 +22,10 @@
                  (update performance
                          :params assoc param val)))))))
 
+(defn ctl-osc-handler [node param]
+  (fn [{:keys [args]}]
+    (ctl node param (first args))))
+
 ;; Usefull for combining phraseqs:
 ;; interleave
 ;; stretch
@@ -165,6 +169,24 @@
     (doseq [param params] (handle-param param))
     nil))
 
+(defn handle-mixer [mixer]
+  (dorun
+   (map (fn [{:keys [output sends]} n]
+          (let [unit-path (str "/mixer/" n "/")
+                handlers {(str unit-path "vol") [output :volume]
+                          (str unit-path "pan") [output :pan]}
+                handlers (->> sends
+                              (map (fn [send-path send]
+                                     [[(str send-path "/vol") [send :volume]]
+                                      [(str send-path "/pan") [send :pan]]])
+                                   (map (partial str unit-path "send/") (range)))
+                              (reduce into handlers))]
+            (doseq [[path ctl-args] handlers]
+              (prn "registerin ctl osc-handler: " path (second ctl-args))
+              (osc-handle server path (apply ctl-osc-handler ctl-args)))))
+        mixer
+        (range))))
+
 (defn- seq-stage-phrases [performance]
   (let [{:keys [phrases-per-stage stage]} performance]
     (if phrases-per-stage
@@ -182,6 +204,9 @@
                 (fn [& args]
                   (apply effect (concat args params)))))
     instrument))
+
+(defn- performance-ident->osc-path [ident]
+  (str "/" (name ident)))
 
 (defn begin [lineup metro]
   (let [performer->performance (fn [performer]
@@ -220,15 +245,18 @@
                                                 seq-stage-phrases)
                                             performance))))))
         midi-event-key (java.util.UUID/randomUUID)]
-    (on-event [:midi :note-on] handle-stage-event midi-event-key)
     (doseq [[ident performance-atom] performances]
-      (handle-performance (str "/" (name ident)) performance-atom)
-      (begin-performance performance-atom))
+      (begin-performance performance-atom)
+      (handle-performance (performance-ident->osc-path ident)
+                          performance-atom))
+    (on-event [:midi :note-on] handle-stage-event midi-event-key)
     {:performances (into {} performances)
      :stage-event-key midi-event-key}))
 
 (defn end [ensemble]
-  (doseq [[_ performance-atom] (:performances ensemble)]
+  (remove-event-handler (:stage-event-key ensemble))
+  (doseq [[ident performance-atom] (:performances ensemble)]
+    (osc-rm-all-handlers server (performance-ident->osc-path ident))
     (swap! performance-atom
            (fn [performance]
              (-> performance
@@ -237,5 +265,37 @@
                          (fn [mono-node]
                            (when mono-node
                              (kill mono-node)
-                             nil)))))))
-  (remove-event-handler (:stage-event-key ensemble)))
+                             nil))))))))
+
+(def mixer-buses {:master 0})
+
+(defn target->bus [target]
+  (cond (keyword? target) (target mixer-buses)
+        (inst? target) (:bus target)
+        :else (:master mixer-buses)))
+
+(defn make-mixer [wiring]
+  (let [mixer (mapv (fn [{:keys [instrument output sends] :as unit}]
+                      (let [n-chans (:n-chans instrument)
+                            in-bus (:bus instrument)
+                            out-bus (target->bus output)
+                            unit {:output (ctl (:mixer instrument)
+                                               :out-bus out-bus)}]
+                        (if sends
+                          (into unit
+                                {:sends (mapv (fn [send]
+                                                (inst-mixer n-chans
+                                                            :in-bus in-bus
+                                                            :out-bus (target->bus send)))
+                                              sends)})
+                          unit)))
+                    wiring)]
+    (handle-mixer mixer)
+    mixer))
+
+(defn destroy-mixer [mixer]
+  (osc-rm-all-handlers server "/mixer")
+  (doseq [{:keys [output sends]} mixer]
+    (ctl output :out-bus (target->bus nil))
+    (when sends (doseq [send sends] (kill send))))
+  nil)
