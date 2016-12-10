@@ -83,6 +83,9 @@
                performance)
              performance))))
 
+(defn silence->phraseq [len]
+  (repeat {:length len :tones []}))
+
 (defn stretch-phraseq [n phraseq]
   (concat (repeat n (first phraseq))
           (lazy-seq (stretch-phraseq n (rest phraseq)))))

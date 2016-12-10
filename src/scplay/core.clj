@@ -48,7 +48,7 @@
                   :phrases-per-stage 2
                   :stage :C3
                   :C3 (merge-phraseqs (rand-chord->phraseq 1/4 1/4 3/4 2 [:C3 :minor 3 24])
-                                      (repeat {:length 2 :tones []}))
+                                      (silence->phraseq 2))
                   :D3 (rand-chord->phraseq 1 1/4 4 1 [:D3 :minor 7 24])
                   :params {:vel 60
                            :release 0.8
