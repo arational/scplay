@@ -33,24 +33,20 @@
 ;; stretch
 
 (defn- play-tone [node monophonic? metro phrase-beat params tone]
-  (let [part->params #(->> % :params
+  (let [tone->params #(->> % :params
                            (merge params)
                            seq
                            flatten)
-        part (first tone)
-        beat (+ phrase-beat (:beat part))
+        beat (+ phrase-beat (:beat tone))
         node (at (metro beat)
                  (apply (if monophonic?
                           (partial ctl node)
                           node)
-                        (part->params part)))]
-    (loop [beat beat
-           tone (next tone)]
-      (when tone
-        (let [part (first tone)
-              beat (+ beat (:beat part))]
-          (at (metro beat) (apply ctl node (part->params part)))
-          (recur beat (next tone)))))
+                        (tone->params tone)))
+        length (:length tone)]
+    (when length
+      (let [beat (+ beat length)]
+        (at (metro beat) (ctl node :gate 0))))
     node))
 
 (defn perform [metro performance-atom]
@@ -96,8 +92,7 @@
          (assoc phrase
                 :length (+ length len)
                 :tones (map (fn [tone]
-                              (cons (update (first tone) :beat + len)
-                                    (rest tone)))
+                              (update tone :beat + len))
                             tones)))
        phraseq))
 
@@ -109,9 +104,7 @@
               :tones (apply concat
                             (map (fn [tones delay]
                                    (map (fn [tone]
-                                          (cons (update (first tone)
-                                                        :beat + delay)
-                                                (rest tone)))
+                                          (update tone :beat + delay))
                                         tones))
                                  (map :tones phrases)
                                  (cons 0 lengths)))}))
@@ -131,10 +124,9 @@
   (let [len (* chord-cnt chord-len)
         rand-chord->phrase (fn [beat]
                              (mapv (fn [note delay]
-                                     [{:beat (+ beat delay)
-                                       :params {:note note}}
-                                      {:beat tone-len
-                                       :params {:gate 0}}])
+                                     {:beat (+ beat delay)
+                                      :length tone-len
+                                      :params {:note note}})
                                    (apply rand-chord chord)
                                    (iterate (partial + tone-delay) 0)))]
     (->> (fn []
@@ -152,7 +144,7 @@
                     ([beat]
                      (let [beat (+ beat (rand-nth distances))]
                        (when (< beat len)
-                         (lazy-seq (cons [{:beat beat}]
+                         (lazy-seq (cons {:beat beat}
                                          (phrase beat))))))))})
        repeatedly))
 
