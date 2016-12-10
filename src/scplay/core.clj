@@ -10,6 +10,13 @@
 ;; simple-flute
 ;; bubbles
 
+(def mixer
+  (init-mixer [[sphere :master]
+               [piano effectdummy]
+               [beep effectdummy]
+               [effectdummy :master]]))
+(destroy-mixer mixer)
+
 (definst beep [note {:default 60}
                amp {:default 0.7 :min 0.0 :max 0.0 :step 0.1}]
   (* amp
@@ -24,6 +31,11 @@
                                  0.1 0.1))]
     (local-out output)
     (* amp output)))
+
+(definst effectdummy []
+  (* (env-gen (perc 0.01 0.01) :action FREE)
+     (saw 440)))
+
 
 (def ensemble
   (begin {:sphere {:instrument sphere
@@ -46,10 +58,10 @@
                  :single (rand-rhythm->phraseq 4 [1/4 1/2 1])
                  :params {:amp 0.6
                           :note 60}}
-          :mono-test {:instrument piano
+          :mono-test {:instrument effectdummy
                       :monophonic? true
                       :effect fx-feedback
-                      :params {:decay 0.8}}}
+                      :params {:decay 0.7}}}
         (metronome 60)))
 (end ensemble)
 (stop)

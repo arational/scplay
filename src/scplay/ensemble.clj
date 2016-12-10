@@ -22,9 +22,11 @@
                  (update performance
                          :params assoc param val)))))))
 
-(defn ctl-osc-handler [node param]
-  (fn [{:keys [args]}]
-    (ctl node param (first args))))
+(defn mixer-osc-handler [instrument mixer-control]
+  (let [control ({:vol inst-volume!
+                  :pan inst-pan!} mixer-control)]
+    (fn [{:keys [args]}]
+      (control instrument (first args)))))
 
 ;; Usefull for combining phraseqs:
 ;; interleave
@@ -169,23 +171,22 @@
     (doseq [param params] (handle-param param))
     nil))
 
-(defn handle-mixer [mixer]
-  (dorun
-   (map (fn [{:keys [output sends]} n]
-          (let [unit-path (str "/mixer/" n "/")
-                handlers {(str unit-path "vol") [output :volume]
-                          (str unit-path "pan") [output :pan]}
-                handlers (->> sends
-                              (map (fn [send-path send]
-                                     [[(str send-path "/vol") [send :volume]]
-                                      [(str send-path "/pan") [send :pan]]])
-                                   (map (partial str unit-path "send/") (range)))
-                              (reduce into handlers))]
-            (doseq [[path ctl-args] handlers]
-              (prn "registerin ctl osc-handler: " path (second ctl-args))
-              (osc-handle server path (apply ctl-osc-handler ctl-args)))))
-        mixer
-        (range))))
+(defn handle-instrument [instrument n]
+  (let [unit-path (str "/mixer/" n)]
+    (prn "registering osc-handler for mixer-unit with path:" unit-path)
+    (osc-handle server
+                (str unit-path "/vol")
+                (mixer-osc-handler instrument :vol))
+    (osc-handle server
+                (str unit-path "/pan")
+                (mixer-osc-handler instrument :pan))
+    nil))
+
+(defn handle-master []
+  (osc-handle server
+              "/mixer/master/vol"
+              (fn [{:keys [args]}]
+                (volume (first args)))))
 
 (defn- seq-stage-phrases [performance]
   (let [{:keys [phrases-per-stage stage]} performance]
@@ -274,28 +275,19 @@
         (inst? target) (:bus target)
         :else (:master mixer-buses)))
 
-(defn make-mixer [wiring]
-  (let [mixer (mapv (fn [{:keys [instrument output sends] :as unit}]
-                      (let [n-chans (:n-chans instrument)
-                            in-bus (:bus instrument)
-                            out-bus (target->bus output)
-                            unit {:output (ctl (:mixer instrument)
-                                               :out-bus out-bus)}]
-                        (if sends
-                          (into unit
-                                {:sends (mapv (fn [send]
-                                                (inst-mixer n-chans
-                                                            :in-bus in-bus
-                                                            :out-bus (target->bus send)))
-                                              sends)})
-                          unit)))
-                    wiring)]
-    (handle-mixer mixer)
-    mixer))
+(defn init-mixer [layout]
+  (handle-master)
+  (mapv (fn [[input-inst output-inst] n]
+          (let [bus (if (keyword? output-inst)
+                      (mixer-buses output-inst)
+                      (:bus output-inst))]
+            (ctl (:mixer input-inst) :out-bus bus)
+            (handle-instrument input-inst n))
+          input-inst)
+        layout (range)))
 
 (defn destroy-mixer [mixer]
   (osc-rm-all-handlers server "/mixer")
-  (doseq [{:keys [output sends]} mixer]
-    (ctl output :out-bus (target->bus nil))
-    (when sends (doseq [send sends] (kill send))))
+  (doseq [instrument mixer]
+    (ctl (:mixer instrument) :out-bus (:master mixer-buses)))
   nil)
