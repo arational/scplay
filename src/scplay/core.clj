@@ -39,23 +39,24 @@
 
 (def ensemble
   (begin {:sphere {:instrument sphere
-                   :phrases-per-stage 2
+                   :repeat-phrases 2
                    :stage :C4
-                   :C4 (interleave (rand-chord->phraseq 3 0 4 1 [:C3 :minor 3 24])
-                                   (rand-chord->phraseq 3 0 4 1 [:D3 :minor 3 24]))
+                   :stages {:C4 (interleave (rand-chord->phraseq 3 0 4 1 [:C3 :minor 3 24])
+                                            (rand-chord->phraseq 3 0 4 1 [:D3 :minor 3 24]))}
                    :params {:amp 0.8}}
           :piano {:instrument piano
-                  :phrases-per-stage 2
+                  :repeat-phrases 2
                   :stage :C3
-                  :C3 (merge-phraseqs (rand-chord->phraseq 1/4 1/4 3/4 2 [:C3 :minor 3 24])
-                                      (silence->phraseq 2))
-                  :D3 (rand-chord->phraseq 1 1/4 4 1 [:D3 :minor 7 24])
+                  :stages {:C3 (merge-phraseqs (rand-chord->phraseq 1/4 1/4 3/4 2 [:C3 :minor 3 24])
+                                               (silence->phraseq 2))
+                           :D3 (rand-chord->phraseq 1 1/4 4 1 [:D3 :minor 7 24])}
+                  :control-params [{:key :vel :min 0 :max 100 :step 1}]
                   :params {:vel 60
                            :release 0.8
                            :sustain 0.1}}
           :beep {:instrument beep
                  :stage :single
-                 :single (rand-rhythm->phraseq 4 [1/4 1/2 1])
+                 :stages {:single (rand-rhythm->phraseq 4 [1/4 1/2 1])}
                  :params {:amp 0.6
                           :note 60}}
           :mono-test {:instrument effectdummy

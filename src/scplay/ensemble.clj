@@ -8,19 +8,19 @@
 ;;(osc-rm-listener server :debug)
 
 ;; TODO: use step
-(defn param-osc-handler [{:keys [name min max step] :as param}
-                         performance-atom]
-  (fn [{:keys [args]}]
-    (let [min (or min 0)
-          max (or max 1.0)
-          val (scale-range (first args) 0.0 1.0 min max)]
-      (swap! performance-atom
-             (fn [{:keys [stage mono-node] :as performance}]
-               (let [param (keyword name)]
-                 (when (and (not stage) mono-node)
-                   (apply ctl mono-node param val))
-                 (update performance
-                         :params assoc param val)))))))
+(defn param-osc-handler [params-atom
+                         control-param
+                         mono-node]
+  (let [{:keys [key min max step]} control-param]
+    (fn [{:keys [args]}]
+      (let [min (or min 0)
+            max (or max 1.0)
+            val (scale-range (first args) 0.0 1.0 min max)]
+        (swap! params-atom
+               (fn [params]
+                 (when mono-node
+                   (apply ctl mono-node key val))
+                 (assoc params key val)))))))
 
 (defn mixer-osc-handler [instrument mixer-control]
   (let [control ({:vol inst-volume!
@@ -49,39 +49,52 @@
         (at (metro beat) (ctl node :gate 0))))
     node))
 
-(defn perform [metro performance-atom]
-  (swap! performance-atom
-         (fn [{:keys [instrument stage params phrases-per-stage stage-phrases phrase-in-stage monophonic? mono-node] :as performance}]
-           (if stage
-             (let [phraseq (stage performance)
-                   phrase (if phrases-per-stage
-                            (stage-phrases phrase-in-stage)
-                            (first phraseq))
-                   phrase-beat (metro)
-                   node (if mono-node
-                          mono-node
-                          instrument)
-                   performance (if monophonic?
-                                 (assoc performance :mono-node node)
-                                 performance)
-                   performance (if phrases-per-stage
-                                 (assoc performance
-                                        :phrase-in-stage (mod (inc phrase-in-stage)
-                                                              phrases-per-stage))
-                                 (assoc performance
-                                        stage (rest phraseq)))]
-               (apply-by (metro (+ phrase-beat (:length phrase)))
-                         #'perform
-                         [metro performance-atom])
-               (doseq [tone (:tones phrase)]
-                 (play-tone node
-                            monophonic?
-                            metro
-                            phrase-beat
-                            params
-                            tone))
-               performance)
-             performance))))
+(defn- buffered-staging? [staging]
+  (boolean (:buffer-size staging)))
+
+(defn- get-phrase [staging]
+  (let [{:keys [stage
+                stages
+                buffer
+                buffer-pos]} staging]
+    (if (buffered-staging? staging)
+      (buffer buffer-pos)
+      (first (get stages stage)))))
+
+(defn- seq-next-phrase [staging]
+  (let [{:keys [stage
+                buffer-size]} staging]
+    (if (buffered-staging? staging)
+      (update staging
+              :buffer-pos
+              #(mod (inc %) buffer-size))
+      (update-in staging
+                 [:stages stage]
+                 rest))))
+
+(defn perform [metro performance]
+  (when-let [staging @(:staging performance)]
+    (let [{:keys [instrument
+                  monophonic?
+                  mono-node]} performance
+          params @(:params performance)
+          phrase (get-phrase staging)
+          phrase-beat (metro)
+          node (if mono-node
+                 mono-node
+                 instrument)]
+      (swap! (:staging performance) seq-next-phrase)
+      (apply-by (metro (+ phrase-beat (:length phrase)))
+                #'perform
+                [metro performance])
+      (doseq [tone (:tones phrase)]
+        (play-tone node
+                   monophonic?
+                   metro
+                   phrase-beat
+                   params
+                   tone))
+      nil)))
 
 (defn silence->phraseq [len]
   (repeat {:length len :tones []}))
@@ -152,18 +165,17 @@
        repeatedly))
 
 ;; TODO: implement step
-(defn handle-performance [path performance-atom]
-  (let [{:keys [instrument params]} @performance-atom
-        usable-param? (fn [param]
-                        (contains? params (keyword (:name param))))
-        handle-param (fn [{:keys [name] :as param}]
-                       (prn (str path "/" name))
-                       (osc-handle server (str path "/" name)
-                                   (param-osc-handler param performance-atom)))
-        params (->> instrument
-                    :params
-                    (filter usable-param?))]
-    (doseq [param params] (handle-param param))
+(defn handle-performance [path control-params performance]
+  (let [params-atom (:params performance)
+        mono-node (:mono-node performance)]
+    (doseq [control-param control-params]
+      (let [key (:key control-param)]
+        (prn (str path "/" (name key)))
+        (osc-handle server
+                    (str path "/" (name key))
+                    (param-osc-handler params-atom
+                                       control-param
+                                       mono-node))))
     nil))
 
 (defn handle-instrument [instrument n]
@@ -183,85 +195,120 @@
               (fn [{:keys [args]}]
                 (volume (first args)))))
 
-(defn- seq-stage-phrases [performance]
-  (let [{:keys [phrases-per-stage stage]} performance]
-    (if phrases-per-stage
-      (assoc performance
-             :stage-phrases (->> (stage performance)
-                                 (take phrases-per-stage)
-                                 vec)
-             stage (drop phrases-per-stage (stage performance)))
-      performance)))
+(defn- seq-next-stage-to-buffer [staging]
+  (if (buffered-staging? staging)
+    (let [{:keys [buffer-size
+                  buffer
+                  stage
+                  stages]} staging]
+      (-> staging
+          (assoc :buffer (->> (stage stages)
+                              (take buffer-size)
+                              vec))
+          (update-in [:stages stage]
+                     #(drop buffer-size %))))
+    staging))
 
 (defn- performer->effect-inst [{:keys [instrument effect params]}]
-  (if effect
-    (fn [& params]
-      (inst-fx! instrument
-                (fn [& args]
-                  (apply effect (concat args params)))))
-    instrument))
+  (fn [& params]
+    (inst-fx! instrument
+              (fn [& args]
+                (apply effect (concat args params))))))
 
 (defn- performance-ident->osc-path [ident]
   (str "/" (name ident)))
 
+(defn- performer->staging [performer]
+  (let [{:keys [repeat-phrases
+                stage
+                stages]} performer
+        staging {:stage stage
+                 :stages stages}]
+    (if repeat-phrases
+      (assoc staging
+             :buffer-size repeat-phrases
+             :buffer-pos 0
+             :buffer [])
+      staging)))
+
+(defn- performer->performance [performer]
+  (let [{:keys [stage
+                params
+                instrument
+                effect]} performer
+        performance {:instrument (if effect
+                                   (performer->effect-inst performer)
+                                   instrument)
+                     :params (atom params)}]
+    (if stage
+      (assoc performance
+             :staging (-> performer
+                          performer->staging
+                          seq-next-stage-to-buffer
+                          atom))
+      performance)))
+
+(defn- staged-performance? [performance]
+  (boolean (:staging performance)))
+
+(defn- begin-performance [metro performance]
+  (let [monophonic? (:monophonic? performance)
+        instrument (:instrument performance)
+        params @(:params performance)
+        performance (if (or (not (staged-performance? performance)) monophonic?)
+                      (assoc performance
+                             :mono-node (apply instrument
+                                               (-> params
+                                                   seq
+                                                   flatten)))
+                      performance)]
+    (when (staged-performance? performance)
+      (perform metro performance))
+    performance))
+
 (defn begin [lineup metro]
-  (let [performer->performance (fn [performer]
-                                 (-> (if (:phrases-per-stage performer)
-                                       (assoc performer
-                                              :phrase-in-stage 0)
-                                       performer)
-                                     seq-stage-phrases
-                                     (assoc :instrument
-                                            (performer->effect-inst performer))
-                                     atom))
-        performances (map (fn [[ident performance]]
-                            [ident (performer->performance performance)])
-                          lineup)
-        begin-performance (fn [performance-atom]
-                            (let [{:keys [stage monophonic?]} @performance-atom]
-                              (when (or (not stage) monophonic?)
-                                (swap! performance-atom
-                                       (fn [{:keys [instrument params]
-                                             :as performance}]
-                                         (assoc performance
-                                                :mono-node (apply instrument
-                                                                  (-> params
-                                                                      seq
-                                                                      flatten))))))
-                              (when stage (perform metro performance-atom))))
+  (let [performances (->> lineup
+                          (map (fn [[ident performance]]
+                                 [ident (performer->performance performance)]))
+                          (map (fn [[ident performance]]
+                                 [ident (begin-performance metro performance)])))
         handle-stage-event (fn [{:keys [note]}]
                              (let [note-name (find-note-name note)]
                                (prn note-name)
-                               (doseq [[_ performance-atom] performances]
-                                 (swap! performance-atom
-                                        (fn [performance]
-                                          (if (contains? performance note-name)
-                                            (-> (assoc performance
-                                                       :stage note-name)
-                                                seq-stage-phrases)
-                                            performance))))))
+                               (doseq [[_ performance] performances]
+                                 (when-let [staging-atom (:staging performance)]
+                                   (swap! staging-atom
+                                          (fn [staging]
+                                            (let [{:keys [stages]} staging]
+                                              (if (contains? staging note-name)
+                                                (-> staging
+                                                    (assoc :stage note-name)
+                                                    seq-next-stage-to-buffer)
+                                                staging))))))))
+        ;; begin all performances
         midi-event-key (java.util.UUID/randomUUID)]
-    (doseq [[ident performance-atom] performances]
-      (begin-performance performance-atom)
-      (handle-performance (performance-ident->osc-path ident)
-                          performance-atom))
+    (doseq [[ident performance] performances]
+      (when-let [control-params (get-in lineup [ident :control-params])]
+        (handle-performance (performance-ident->osc-path ident)
+                            control-params
+                            performance)))
     (on-event [:midi :note-on] handle-stage-event midi-event-key)
     {:performances (into {} performances)
      :stage-event-key midi-event-key}))
 
 (defn end [ensemble]
+  ;; Remove the midi-event-handler
   (remove-event-handler (:stage-event-key ensemble))
-  (doseq [[ident performance-atom] (:performances ensemble)]
-    (osc-rm-all-handlers server (performance-ident->osc-path ident))
-    (swap! performance-atom
-           (fn [performance]
-             (-> performance
-                 (dissoc :stage)
-                 (update :mono-node
-                         (fn [mono-node]
-                           (when mono-node
-                             (kill mono-node)
-                             nil))))))))
+  (let [performances (:performances ensemble)]
+    ;; Remove all osc-handlers
+    (doseq [[ident _] performances]
+      (osc-rm-all-handlers server (performance-ident->osc-path ident)))
+    ;; Stop the performances
+    (doseq [[_ performance] performances]
+      (when (staged-performance? performance)
+        (reset! (:staging performance) nil))
+      (when-let [mono-node (:mono-node performance)]
+        (kill mono-node)))))
 
 (def mixer-buses {:master 0})
 
