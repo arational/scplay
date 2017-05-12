@@ -231,15 +231,21 @@
              :buffer [])
       staging)))
 
+(defn- inst-params->performance-params [params]
+  (->> params
+       (map (fn [{:keys [name default]}]
+              [(keyword name) default]))
+       (into {})))
+
 (defn- performer->performance [performer]
   (let [{:keys [stage
-                params
                 instrument
                 effect]} performer
+        {:keys [params]} instrument
         performance {:instrument (if effect
                                    (performer->effect-inst performer)
                                    instrument)
-                     :params (atom params)}]
+                     :params (atom (inst-params->performance-params params))}]
     (if stage
       (assoc performance
              :staging (-> performer
