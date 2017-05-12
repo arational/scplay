@@ -8,15 +8,16 @@
 ;;(osc-rm-listener server :debug)
 
 ;; TODO: use step
-(defn param-osc-handler [params-atom
-                         control-param
-                         mono-node]
-  (let [{:keys [key min max step]} control-param]
-    (fn [{:keys [args]}]
-      (let [min (or min 0)
-            max (or max 1.0)
-            val (scale-range (first args) 0.0 1.0 min max)]
-        (swap! params-atom
+(defn param-osc-handler [performance
+                         inst-param]
+  (let [{:keys [params mono-node]} performance
+        {:keys [name min max step]} inst-param
+        key (keyword name)
+        min (or min 0.0)
+        max (or max 1.0)]
+    (fn [args]
+      (let [val (scale-range (first args) 0.0 1.0 min max)]
+        (swap! params
                (fn [params]
                  (when mono-node
                    (apply ctl mono-node key val))
@@ -164,20 +165,6 @@
                                          (phrase beat))))))))})
        repeatedly))
 
-;; TODO: implement step
-(defn handle-performance [path control-params performance]
-  (let [params-atom (:params performance)
-        mono-node (:mono-node performance)]
-    (doseq [control-param control-params]
-      (let [key (:key control-param)]
-        (prn (str path "/" (name key)))
-        (osc-handle server
-                    (str path "/" (name key))
-                    (param-osc-handler params-atom
-                                       control-param
-                                       mono-node))))
-    nil))
-
 (defn handle-instrument [instrument n]
   (let [unit-path (str "/mixer/" n)]
     (prn "registering osc-handler for mixer-unit with path:" unit-path)
@@ -214,9 +201,6 @@
     (inst-fx! instrument
               (fn [& args]
                 (apply effect (concat args params))))))
-
-(defn- performance-ident->osc-path [ident]
-  (str "/" (name ident)))
 
 (defn- performer->staging [performer]
   (let [{:keys [repeat-phrases
@@ -272,12 +256,25 @@
       (perform metro performance))
     performance))
 
+(defn- ->osc-path->handlers [performances lineup]
+  (reduce (fn [osc-path->handlers [ident performer]]
+            (reduce (fn [osc-path->handlers [k osc-path]]
+                      (let [performance (get performances ident)
+                            inst-param (some #(when (= (keyword (:name %)) k) %)
+                                             (get-in performer [:instrument :params]))]
+                        (update osc-path->handlers osc-path
+                                conj (param-osc-handler performance
+                                                        inst-param))))
+                    osc-path->handlers (:controls performer)))
+          {} lineup))
+
 (defn begin [lineup metro]
   (let [performances (->> lineup
+                          (map (fn [[ident performer]]
+                                 [ident (performer->performance performer)]))
                           (map (fn [[ident performance]]
-                                 [ident (performer->performance performance)]))
-                          (map (fn [[ident performance]]
-                                 [ident (begin-performance metro performance)])))
+                                 [ident (begin-performance metro performance)]))
+                          (into {}))
         handle-stage-event (fn [{:keys [note]}]
                              (let [note-name (find-note-name note)]
                                (prn note-name)
@@ -291,24 +288,24 @@
                                                     (assoc :stage note-name)
                                                     seq-next-stage-to-buffer)
                                                 staging))))))))
+        osc-path->handlers (->osc-path->handlers performances lineup)
         ;; begin all performances
         midi-event-key (java.util.UUID/randomUUID)]
-    (doseq [[ident performance] performances]
-      (when-let [control-params (get-in lineup [ident :control-params])]
-        (handle-performance (performance-ident->osc-path ident)
-                            control-params
-                            performance)))
+    (doseq [[osc-path handlers] osc-path->handlers]
+      (prn (str "Handle osc-path " osc-path
+                " with " (count handlers) " handlers"))
+      (osc-handle server osc-path
+                  (fn [{:keys [args]}]
+                    (doseq [handler handlers]
+                      (handler args)))))
     (on-event [:midi :note-on] handle-stage-event midi-event-key)
-    {:performances (into {} performances)
+    {:performances performances
      :stage-event-key midi-event-key}))
 
 (defn end [ensemble]
   ;; Remove the midi-event-handler
   (remove-event-handler (:stage-event-key ensemble))
   (let [performances (:performances ensemble)]
-    ;; Remove all osc-handlers
-    (doseq [[ident _] performances]
-      (osc-rm-all-handlers server (performance-ident->osc-path ident)))
     ;; Stop the performances
     (doseq [[_ performance] performances]
       (when (staged-performance? performance)

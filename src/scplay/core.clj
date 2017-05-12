@@ -42,27 +42,22 @@
                    :repeat-phrases 2
                    :stage :C4
                    :stages {:C4 (interleave (rand-chord->phraseq 3 0 4 1 [:C3 :minor 3 24])
-                                            (rand-chord->phraseq 3 0 4 1 [:D3 :minor 3 24]))}
-                   :params {:amp 0.8}}
+                                            (rand-chord->phraseq 3 0 4 1 [:D3 :minor 3 24]))}}
           :piano {:instrument piano
                   :repeat-phrases 2
                   :stage :C3
                   :stages {:C3 (merge-phraseqs (rand-chord->phraseq 1/4 1/4 3/4 2 [:C3 :minor 3 24])
                                                (silence->phraseq 2))
                            :D3 (rand-chord->phraseq 1 1/4 4 1 [:D3 :minor 7 24])}
-                  :control-params [{:key :vel :min 0 :max 100 :step 1}]
-                  :params {:vel 60
-                           :release 0.8
-                           :sustain 0.1}}
+                  :controls {:release "/params/1"}}
           :beep {:instrument beep
                  :stage :single
-                 :stages {:single (rand-rhythm->phraseq 4 [1/4 1/2 1])}
-                 :params {:amp 0.6
-                          :note 60}}
-          :mono-test {:instrument effectdummy
+                 :stages {:single (rand-rhythm->phraseq 4 [1/4 1/2 1])}}
+          :mono-test {:instrument piano
                       :monophonic? true
                       :effect fx-feedback
-                      :params {:decay 0.7}}}
+                      ;; TODO: this doesn't apply to the effect instrument
+                      :params {:decay 0.2}}}
         (metronome 60)))
 (end ensemble)
 (stop)
