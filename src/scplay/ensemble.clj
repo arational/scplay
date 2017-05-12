@@ -209,7 +209,7 @@
                      #(drop buffer-size %))))
     staging))
 
-(defn- performer->effect-inst [{:keys [instrument effect params]}]
+(defn- performer->effect-inst [{:keys [instrument effect]}]
   (fn [& params]
     (inst-fx! instrument
               (fn [& args]
