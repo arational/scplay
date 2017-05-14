@@ -260,15 +260,21 @@
     performance))
 
 (defn- ->osc-path->handlers [performances lineup]
-  (reduce (fn [osc-path->handlers [ident performer]]
+  (reduce (fn [osc-path->handlers [ident {:keys [controls instrument effect]}]]
             (reduce (fn [osc-path->handlers [k osc-path]]
                       (let [performance (get performances ident)
                             inst-param (some #(when (= (keyword (:name %)) k) %)
-                                             (get-in performer [:instrument :params]))]
-                        (update osc-path->handlers osc-path
-                                conj (param-osc-handler performance
-                                                        inst-param))))
-                    osc-path->handlers (:controls performer)))
+                                             (:params (or effect instrument)))]
+                        (if inst-param
+                          (update osc-path->handlers osc-path
+                                  conj (param-osc-handler performance
+                                                          inst-param))
+                          (do (prn (str "WARNING: Parameter with name " k
+                                        " doesn't exist in the parameter list "
+                                        "of the instrument used by the performer "
+                                        ident))
+                              osc-path->handlers))))
+                    osc-path->handlers controls))
           {} lineup))
 
 (defn begin [lineup metro]
