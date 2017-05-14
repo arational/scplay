@@ -216,10 +216,11 @@
       staging)))
 
 (defn- inst-params->performance-params [params]
-  (->> params
-       (map (fn [{:keys [name default]}]
-              [(keyword name) default]))
-       (into {})))
+  (-> (->> params
+           (map (fn [{:keys [name default]}]
+                  [(keyword name) default]))
+           (into {}))
+      (dissoc :bus)))
 
 (defn- performer->performance [performer]
   (let [{:keys [stage
