@@ -20,7 +20,7 @@
         (swap! params
                (fn [params]
                  (when mono-node
-                   (apply ctl mono-node key val))
+                   (ctl mono-node key val))
                  (assoc params key val)))))))
 
 (defn mixer-osc-handler [instrument mixer-control]
