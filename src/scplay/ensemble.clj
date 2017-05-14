@@ -226,11 +226,13 @@
   (let [{:keys [stage
                 instrument
                 effect]} performer
-        {:keys [params]} instrument
+        {:keys [params]} (or effect instrument)
         performance {:instrument (if effect
                                    (performer->effect-inst performer)
                                    instrument)
-                     :params (atom (inst-params->performance-params params))}]
+                     :params (-> params
+                                 inst-params->performance-params
+                                 atom)}]
     (if stage
       (assoc performance
              :staging (-> performer
