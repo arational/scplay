@@ -52,10 +52,10 @@
              (stage-performance performance stage-key))
            performances)))
 
-(defn performer->staging [performer]
+(defn lineup->staging [lineup]
   (let [{:keys [repeat-phrases
                 stage
-                stages]} performer
+                stages]} lineup
         staging {:stage stage
                  :stages stages}]
     (if repeat-phrases
@@ -183,7 +183,7 @@
                      tone))
         nil))))
 
-(defn- performer->play-fn [{:keys [instrument effect]}]
+(defn- lineup->play-fn [{:keys [instrument effect]}]
   (if effect
     (fn [& params]
       (inst-fx! instrument
@@ -191,28 +191,31 @@
                   (apply effect (concat args params)))))
     instrument))
 
-(defn- inst-params->performance-params [params]
-  (-> (->> params
-           (map (fn [{:keys [name default]}]
-                  [(keyword name) default]))
-           (into {}))
-      (dissoc :bus)))
+(defn- lineup->params [lineup]
+  (let [{:keys [instrument
+                params
+                effect]} lineup
+        inst-params (:params (or effect instrument))]
+    (-> (->> inst-params
+             (map (fn [{:keys [name default]}]
+                    (let [param-key (keyword name)]
+                      [param-key (or (param-key params)
+                                     default)])))
+             (into {}))
+        (dissoc :bus))))
 
-(defn performer->performance [performer]
+(defn make-performance [lineup]
   (let [{:keys [stage
-                instrument
-                effect
-                controls]} performer
-        {:keys [params]} (or effect instrument)
-        performance (assoc performer
-                           :play-fn (performer->play-fn performer)
-                           :params (-> params
-                                       inst-params->performance-params
+                controls]} lineup
+        performance (assoc lineup
+                           :play-fn (lineup->play-fn lineup)
+                           :params (-> lineup
+                                       lineup->params
                                        atom))]
     (if stage
       (-> performance
-          (assoc :staging (-> performer
-                              performer->staging
+          (assoc :staging (-> lineup
+                              lineup->staging
                               seq-next-stage-to-buffer
                               atom))
           (dissoc :stage :stages))
