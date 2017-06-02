@@ -1,4 +1,4 @@
-(ns scplay.sphere
+(ns scplay.inst.sphere
   (:use overtone.core))
 
 (definst sphere [note {:default 60 :min 0 :max 255 :step 1}

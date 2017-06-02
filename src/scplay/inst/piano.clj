@@ -1,4 +1,4 @@
-(ns scplay.piano
+(ns scplay.inst.piano
   (:use [overtone.sc ugens envelope]
         [overtone.studio mixer inst]))
 

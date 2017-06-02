@@ -1,6 +1,6 @@
 (ns scplay.mixer
   (:use [overtone.core]
-        [scplay.ensemble]))
+        [scplay.performance]))
 
 (def mixer-buses {:master 0})
 

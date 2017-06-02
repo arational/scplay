@@ -1,4 +1,4 @@
-(ns scplay.ensemble
+(ns scplay.performance
   (:use [overtone.core])
   (:require [clojure.string :as str]
             [overtone.osc.util :as osc-util]))
